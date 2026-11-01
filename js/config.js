@@ -10,7 +10,7 @@
 //  or you can paste your deployment URL here directly.
 // ════════════════════════════════════════════════════════════════
 window.DEEPA_CONFIG = {
-  apiEndpoint: 'https://script.google.com/macros/s/AKfycby0czOp6UfqTj8u4Ua3oTx7uLatDYgzzVi9cyEPbeYVbCCcVrIpUoKRWMVKesRnPh8/exec',
+  apiEndpoint: '__DEEPA_API_ENDPOINT__',
 
   appName: 'Deepa Silks Store Operations Checklist',
   storeName: 'Deepa Silks',
