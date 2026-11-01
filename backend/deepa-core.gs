@@ -301,7 +301,10 @@ var DeepaCore = (function () {
     } catch (e) { return s; }
   };
 
-  var ADMIN_ROLES = ['admin', 'owner', 'manager', 'store manager', 'storemanager', 'proprietor'];
+  // Deepa: ONLY Role = "Admin" opens the Dashboard / Admin page. Every other
+  // role (Manager, HR, Staff, …) is a normal checklist user; a role still
+  // decides which tasks a user sees through Checklist_Config's role column.
+  var ADMIN_ROLES = ['admin'];
 
   function hashPin(pin, salt) {
     return 'sha256:' + sha256Hex(String(salt) + ':' + String(pin));

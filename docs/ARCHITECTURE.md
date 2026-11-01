@@ -67,8 +67,11 @@ Key decisions:
 
 For a date range `[from, to]` and “today”:
 
-- **assigned** = active tasks assigned to the user set (Deepa workbook has no
-  assignment column ⇒ every active task is assigned to `['all']` = everyone).
+- **assigned** = active tasks assigned to the user set. Checklist_Config may
+  carry a `Role` (or `Assigned_To`) column: a task with `Manager` there is
+  shown only to users whose Users-sheet Role is `Manager` (comma lists such as
+  `Manager, HR` and staff names also work); an empty cell or no column ⇒
+  `['all']` = everyone.
 - **submitted (distinct)** = tasks whose *latest* submission on that date has a
   valid status (`OK` or `FAIL`). Multiple submissions of the same task that day
   count **once** (resubmissions are tracked separately as *updates*).
@@ -98,7 +101,7 @@ Source workbook template: `sheets/deepa-silks-workbook-template.xlsx`
 
 | Sheet | Purpose | Required headers (aliases accepted) |
 |---|---|---|
-| `Checklist_Config` | tasks = source of truth | `Task_ID`, `Section`, `Task_Name`, `Type`, `Mandatory`, `Photo_Required`, `Active`, optional `Assigned_To`, optional `Frequency` (`Daily` / `Weekly` = Fridays / `Monthly` = the 28th; blank = Daily) |
+| `Checklist_Config` | tasks = source of truth | `Task_ID`, `Section`, `Task_Name`, `Type`, `Mandatory`, `Photo_Required`, `Active`, optional `Role` / `Assigned_To` (role or staff names, comma-separated; empty = everyone), optional `Frequency` (`Daily` / `Weekly` = Fridays / `Monthly` = the 28th; blank = Daily) |
 | `Users` | staff accounts | `Name`, `PIN`, `Role`, `Active` |
 | `Submissions` | append-only audit log | `Timestamp`, `Date`, `Staff_Name`, `Role`, `Section`, `Task_ID`, `Task_Name`, `Type`, `Response`, `Photo_URL`, `Status`, `Remarks`, `Sequence`, `Override_Reason`, `Submission_ID`, `Photo_Time` |
 | `Settings` | key/value store | `Key`, `Value` (uses `Store_Name`, `Store_Location`, …) |
@@ -150,7 +153,8 @@ name, role, IST timestamp, IST date) — a client cannot spoof them.
   default 480 min, hard cap 6 h by CacheService).
 - Every action passes `requireSession_`; admin actions pass `admin_` which
   checks the **server-side** `isAdmin` flag derived from the Users-sheet
-  `Role` (`admin|owner|manager|store manager|…`).
+  `Role` — only `Admin` is an admin; `Manager`, `HR`, `Staff` etc. are
+  normal checklist users.
 - The session's user is re-checked against the Users sheet (60 s cache), so
   deactivating a user revokes access within ~1 minute; explicit deactivation
   also bumps a per-user revocation stamp.

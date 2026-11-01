@@ -41,10 +41,10 @@ PIN (4–8 digits, entered on keypad)
 - Every request re-validates the session against the Users sheet (60 s cache),
   so **deactivating a user cuts access within ~1 minute**; explicit
   deactivation also bumps a per-user revocation stamp (`rev:<name>`, 6 h).
-- Admin rights come from the sheet column `Role`
-  (`admin`, `owner`, `manager`, `store manager`, `storemanager`, `proprietor`,
-  case-insensitive). Anything else — including a missing `Role` column — is
-  **Staff**.
+- Admin rights come from the sheet column `Role`: **only `Admin`**
+  (case-insensitive). Every other role — `Manager`, `HR`, `Staff`, a custom
+  role, or a missing `Role` column — is a normal checklist user. A role still
+  decides which tasks a user sees (Checklist_Config `Role` / `Assigned_To`).
 
 ## 3. Authorization (two roles, server-side)
 

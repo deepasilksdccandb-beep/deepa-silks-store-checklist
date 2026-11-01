@@ -74,8 +74,8 @@ tests pass; the site is at `https://<account>.github.io/deepa-silks-store-checkl
    |---|---|---|---|
    | Your Name | 4–8 digits of your choice | `Admin` | Yes |
 
-   > The Deepa workbook had **no `Role` column**, so anyone without `Admin`
-   > (or `Owner/Manager/Store Manager`) is a **Staff** user — set the Role
+   > Only Role = **`Admin`** opens the Dashboard / Admin page. `Manager`,
+   > `HR`, `Staff` and any other role are normal checklist users — set the Role
    > *before* the first login or you will have no admin. PINs are hashed on
    > first successful login; until then the sheet holds the plain value, so
    > share the sheet edit access only with the deployer account.

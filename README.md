@@ -29,6 +29,8 @@ This is the MPS Silks checklist app re-branded for **Deepa Silks (Dharmapuri)**.
 | Browser globals / storage keys | `MPS_CONFIG`, `MPS_API`, `mpsAuth`, `mps_…` | `DEEPA_CONFIG`, `DEEPA_API`, `deepaAuth`, `deepa_…` (so both apps can live on the same GitHub account without clashing) |
 | Default location | KGF | Dharmapuri |
 
+**Role-based tasks (Deepa):** in `Users`, set each person's Role (`Admin`, `Manager`, `HR`, `Staff`, …). Only `Admin` opens the Dashboard / Admin page; every other role is a normal checklist user. In `Checklist_Config`, add a column headed **`Role`** and pick a role per task (e.g. `Manager`): that task then shows **only** to users with that role. Leave it empty for a task everyone sees. Several roles: `Manager, HR`. After changing someone's role, they must log out and log in again.
+
 **When you duplicate the MPS Google Sheet for Deepa:**
 1. `Settings` tab → `Store_Name` = **Deepa Silks**, `Store_Location` = **Dharmapuri** (the sheet value wins over `js/config.js`).
 2. `Users` tab → delete the MPS staff rows and add Deepa staff with plain 4-digit PINs (they are hashed automatically on first login; MPS hashes will not work with the new Apps Script project's salt).

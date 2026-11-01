@@ -66,10 +66,13 @@ test('constantTimeEq rejects mismatched lengths without throwing', () => {
   assert.strictEqual(C.constantTimeEq('abcd', 'abcd'), true);
 });
 
-test('isAdminRole recognises admin-style roles only', () => {
+test('isAdminRole: only "Admin" is an admin; Manager, HR and others are normal users', () => {
   assert.strictEqual(C.isAdminRole('Admin'), true);
-  assert.strictEqual(C.isAdminRole('owner'), true);
-  assert.strictEqual(C.isAdminRole('Store Manager'), true);
+  assert.strictEqual(C.isAdminRole(' admin '), true);
+  assert.strictEqual(C.isAdminRole('Manager'), false);
+  assert.strictEqual(C.isAdminRole('Store Manager'), false);
+  assert.strictEqual(C.isAdminRole('owner'), false);
+  assert.strictEqual(C.isAdminRole('HR'), false);
   assert.strictEqual(C.isAdminRole('Staff'), false);
   assert.strictEqual(C.isAdminRole(''), false);
 });
@@ -421,6 +424,21 @@ test('tasksForUser: honours name/role assignment lists', () => {
   assert.deepStrictEqual(forRamesh.map((t) => t.taskId), ['T001', 'T003']);
   const forAdmin = C.tasksForUser(res.tasks, 'Sunita', 'Admin');
   assert.deepStrictEqual(forAdmin.map((t) => t.taskId), ['T002', 'T003']);
+});
+
+test('tasksForUser: a task with Role = Manager shows only to Manager users (column named "Role")', () => {
+  const res = C.normalizeTasks(DEEPA_TASK_HEADERS.concat('Role'), [
+    ['T001', 'S', 'Common task', 'yesno', 'Yes', 'No', 'Yes', ''],
+    ['T002', 'S', 'Manager task', 'yesno', 'Yes', 'No', 'Yes', 'Manager'],
+    ['T003', 'S', 'HR task', 'yesno', 'Yes', 'No', 'Yes', 'HR'],
+    ['T004', 'S', 'Manager + HR task', 'yesno', 'Yes', 'No', 'Yes', 'Manager, HR']
+  ]);
+  assert.deepStrictEqual(res.problems, []);
+  const ids = (name, role) => C.tasksForUser(res.tasks, name, role).map((t) => t.taskId);
+  assert.deepStrictEqual(ids('Priya', 'Manager'), ['T001', 'T002', 'T004']);
+  assert.deepStrictEqual(ids('Kavya', 'hr'), ['T001', 'T003', 'T004']);
+  assert.deepStrictEqual(ids('Ravi', 'Staff'), ['T001']);
+  assert.deepStrictEqual(ids('Owner', 'Admin'), ['T001']);
 });
 
 test('sectionsFor groups tasks in first-seen order', () => {
