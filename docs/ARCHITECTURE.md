@@ -1,0 +1,249 @@
+# Architecture — Deepa Silks Store Operations Checklist
+
+## 1. Components
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Browser (GitHub Pages, static files — no server of our own)        │
+│  index.html  checklist.html  dashboard.html  admin.html             │
+│  js/config.js(endpoint)  auth.js(token)  api.js  dates.js  xlsx.js  │
+└───────────────┬──────────────────────────────────────────────────────┘
+                │ HTTPS  GET (?action=…)  /  POST (JSON body)
+                │ Authorization header: token from PIN login
+┌───────────────▼──────────────────────────────────────────────────────┐
+│  Google Apps Script web app (deployed from this repo's backend/)    │
+│  DEEPA_BACKEND.gs — routing, sessions, rate limits, photos, sheets    │
+│  deepa-core.gs     — pure logic (header mapping, validation, maths)   │
+│      │               │                    │                         │
+│      ▼               ▼                    ▼                         │
+│  Google Sheets   CacheService         Drive folder (PRIVATE photos) │
+│  (source of      (sessions,           files never shared publicly; │
+│   truth)          rate limits,         served via getPhoto only)    │
+│                   caches)                                           │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+Key decisions:
+
+- **Zero-build static frontend.** Plain HTML/JS/CSS identical in dev and prod;
+  `scripts/build.js` only copies files and injects the public endpoint. GitHub
+  Pages serves `dist/` as-is (`.nojekyll` included).
+- **Google Sheets is the single source of truth** for tasks, users,
+  submissions and settings. There is no separate database, and the app never
+  writes to any other spreadsheet.
+- **Pure core shared with tests.** All business logic lives in
+  `backend/deepa-core.gs` (UMD). Apps Script loads it as a library-style file;
+  Node loads the *same file* in `tests/`. What the tests verify is exactly what
+  runs in production.
+- **Client trusts nothing.** The frontend pre-validates for good UX; the
+  backend re-validates everything and is the only place authorization happens.
+
+## 2. Request flow (staff submission)
+
+1. `index.html` — PIN entered on keypad → `POST {action:'login'}`.
+   Backend verifies the salted hash under a lock, rate-limits failures, and
+   returns a **random session token** (stored server-side in CacheService).
+   The PIN itself is never stored client-side.
+2. `checklist.html` — `GET ?action=getChecklist` returns *the staff member's*
+   assigned, active tasks for the IST “today”, merged with today's latest
+   submissions (so already-done tasks show as done).
+3. Staff answers tasks; for photo tasks the image is resized client-side,
+   then `POST {action:'uploadPhoto'}` → `photoId` (private Drive file).
+4. Local validation (`validateNew`) explains problems (mandatory missing,
+   photo missing, “No” without remark). Then `POST {action:'submitChecklist'}`
+   with a client-generated **`batchId`**.
+5. Backend: session check → assignment check → server validation →
+   **LockService** → idempotency check (`batchId` already written today?
+   → `{duplicate:true}`, no second write) → append rows with
+   `Sequence = First|Update` → invalidate caches → `{ok:true, timestamp}`.
+6. **Only after `ok:true`** does the UI mark tasks submitted and clear the
+   draft. If the network drops, the draft and `batchId` are kept: *Retry* is
+   therefore safe — a response-less retry cannot double-write.
+7. An edit of an already-submitted task requires an **update reason**; it is
+   appended as a new row (`Sequence = Update`), so history is preserved and
+   the dashboard “updates log” can show both entries.
+
+## 3. Completion maths (single place: `computeDashboard`)
+
+For a date range `[from, to]` and “today”:
+
+- **assigned** = active tasks assigned to the user set (Deepa workbook has no
+  assignment column ⇒ every active task is assigned to `['all']` = everyone).
+- **submitted (distinct)** = tasks whose *latest* submission on that date has a
+  valid status (`OK` or `FAIL`). Multiple submissions of the same task that day
+  count **once** (resubmissions are tracked separately as *updates*).
+- **passed** = latest status `OK`. **failed** = latest status `FAIL`.
+  **A failure is submitted, never passed** — `passed + failed === submitted`.
+- **completion % (`pct`)** = `round(submitted ÷ assigned × 100)`
+- **pass rate (`passPct`)** = `round(passed ÷ assigned × 100)` (shown separately)
+- **outstanding** = assigned − submitted, listed task-by-task with a label:
+  - **Pending** — the evaluated day *is* today
+  - **Missed** — the evaluated day is in the past
+
+> **Why Pending vs Missed works this way:** the workbook has **no due-time
+> column**, so “late today” cannot be determined honestly. Rules:
+> *today is never “missed” — tasks due today are **Pending**; only days that
+> have fully passed can be **Missed**.* If due times are ever added to the
+> sheet, this is the one rule that must be revisited (it is documented in the
+> UI as well).
+
+Per-section and per-staff stats aggregate the same per-task rows, and the trend
+computes the headline numbers for each day of the range (range aggregate =
+`sum(submitted) ÷ sum(assigned)` across days).
+
+## 4. Sheet schema & header mapping
+
+Source workbook template: `sheets/deepa-silks-workbook-template.xlsx`
+(4 tabs — created from the Deepa workbook with **no PINs and no user rows**).
+
+| Sheet | Purpose | Required headers (aliases accepted) |
+|---|---|---|
+| `Checklist_Config` | tasks = source of truth | `Task_ID`, `Section`, `Task_Name`, `Type`, `Mandatory`, `Photo_Required`, `Active`, optional `Assigned_To`, optional `Frequency` (`Daily` / `Weekly` = Fridays / `Monthly` = the 28th; blank = Daily) |
+| `Users` | staff accounts | `Name`, `PIN`, `Role`, `Active` |
+| `Submissions` | append-only audit log | `Timestamp`, `Date`, `Staff_Name`, `Role`, `Section`, `Task_ID`, `Task_Name`, `Type`, `Response`, `Photo_URL`, `Status`, `Remarks`, `Sequence`, `Override_Reason`, `Submission_ID`, `Photo_Time` |
+| `Settings` | key/value store | `Key`, `Value` (uses `Store_Name`, `Store_Location`, …) |
+
+Mapping rules (`mapColumns(headers, kind)` in `deepa-core.gs`):
+
+- Columns are matched **by header alias per entity** (exact, then prefix) —
+  *column order never matters* and extra columns are ignored, not fatal.
+- Unknown `Type` values are **reported** and defaulted to `yesno` so the task
+  still works; rows with problems appear in `problems[]` → dashboard
+  “mapping problems” banner + `console.warn` server-side.
+- Unrecognisable sheets produce an explanatory problem instead of an empty app.
+- Blank `Active` = active; `Active/Yes/No` parsing is lenient on case/wording.
+- Task IDs are strings; new tasks get `T001`, `T002`, … numbering by
+  `addTask`.
+
+Values written by the backend are always derived from the **session** (staff
+name, role, IST timestamp, IST date) — a client cannot spoof them.
+
+## 5. Date/time handling
+
+- All date maths happens in `Asia/Kolkata` (`Intl.DateTimeFormat` on the
+  client, `Utilities.getScriptZone()`/explicit zone on the backend).
+- `Date` cells in `Submissions` are normalised to `YYYY-MM-DD`
+  (`normDateCell` accepts `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYY-MM-DD hh:mm`, Excel
+  dates) so string comparison works for filtering.
+- Today = IST today; the day rolls over at 00:00 IST even if the browser
+  timezone differs (covered by boundary tests at 18:30 UTC).
+- **Capture time (`Photo_Time`) is plain text.** Two layers keep it that way:
+  the backend types the whole `Timestamp` / `Photo_Time` columns as text (`@`,
+  done once, idempotently, inside the submit lock) *and* writes `String(...)`;
+  and every read passes through `cellToIstString()`, which turns any `Date`
+  object Sheets still hands back (rows written before the columns were typed)
+  into the store's wall-clock `YYYY-MM-DD HH:MM:SS` by adding +5:30 and reading
+  the UTC getters — so it never depends on the script machine's zone. Comma
+  lists ("t1,t2") stay strings, keeping the times index-aligned with the ids.
+- **The capture time is read on the phone, not at upload time.** `js/exif.js`
+  parses the JPEG's EXIF `DateTimeOriginal` from the *original* file (canvas
+  re-compression strips EXIF), falling back to `file.lastModified`, then "now"
+  (`UI.getPhotoTakenAt`). EXIF carries no timezone, so its value is treated as
+  the phone's/store's local (IST) wall clock. On the server,
+  `cleanPhotoTime` keeps a well-formed value unless it is more than 14 days in
+  the past or 24 h in the future (phone clocks drift; gallery photos can be
+  old) — it is never blanked just for being "too exact".
+
+## 6. Session & authorization flow
+
+- Login → random 32-byte token in `CacheService` (`sess:<token>`, sliding TTL,
+  default 480 min, hard cap 6 h by CacheService).
+- Every action passes `requireSession_`; admin actions pass `admin_` which
+  checks the **server-side** `isAdmin` flag derived from the Users-sheet
+  `Role` (`admin|owner|manager|store manager|…`).
+- The session's user is re-checked against the Users sheet (60 s cache), so
+  deactivating a user revokes access within ~1 minute; explicit deactivation
+  also bumps a per-user revocation stamp.
+- Rate limits: ≥5 failed PINs → that PIN locked 5 min; ≥20 global failures →
+  everything locked 5 min (both under LockService, 15 min windows).
+- Full details and the honest limitation list: [SECURITY.md](SECURITY.md).
+
+## 7. Photo pipeline
+
+`uploadPhoto` (client, pre-submit) → MIME/type/≤3 MB validation →
+private Drive file named `deepa_<date>_<staff>_<taskId>_<uuid>.<ext>` →
+metadata in the file *description* `{staff, taskId, date}` → `photoId` returned,
+stored in `Submissions.Photo_URL`.
+
+Read: `GET ?action=getPhoto&fileId=…` with a session — admins may fetch any
+photo; staff only files whose description `staff` matches their own name.
+No file is ever shared publicly; no Drive URL is ever sent to the browser.
+
+## 8. Export pipeline (client-side)
+
+`dashboard.html` → `js/xlsx.js` builds a real `.xlsx` (stored-ZIP OOXML,
+no dependencies) or a UTF-8 BOM CSV from the same already-filtered data.
+Any user text that looks like a formula (`=`, `+`, `-`, `@`, tab) is
+neutralised with a leading apostrophe (CSV *and* XLSX).
+
+## 9. Build & CI
+
+- `scripts/check-syntax.js` — parses every `.js/.gs/.json` file (lint).
+- `scripts/build.js` — copies to `dist/` (including `js/vendor/` and `images/`),
+  injects `DEEPA_API_ENDPOINT` into `dist/js/config.js`.
+- `.github/workflows/deploy.yml` — on push to `main`: lint → test → build →
+  deploy `dist/` to GitHub Pages (endpoint from repository variable
+  `DEEPA_API_ENDPOINT`; never a secret).
+
+## 10. Admin photo gallery (Photos tab)
+
+One `getPhotos` call per chosen date range; the response is grouped client-side
+so the tab can offer **section filter chips with counts** ("All (n)" plus one
+chip per section). The selected chip is remembered while the range changes (and
+reverts to "All" if that section has no photos in the new range). Cards show
+task, staff, **Photo taken** (the EXIF-derived capture time) and **Submitted**
+(the row timestamp) separately, the photo's position (photo *i* of *n*) and a
+status badge; thumbs load on tap (the list never downloads 200 images at once)
+and open in a enlarge-on-tap modal. "All" mode groups photos under section
+headings; a single-section chip shows a flat newest-first list.
+
+## 11. PDF report (client-side)
+
+`js/report.js` — `buildReportData(checklistResponse, staff, now)` is **pure**
+(tested in Node) and turns the checklist payload into the report model
+(header, summary counts + completion %, per-section rows with worded statuses
+and photo lists). `downloadReport(data, opts)` lazily injects the **vendored**
+`js/vendor/jspdf.umd.min.js` (never a CDN), fetches the photos through the
+same private `getPhoto` endpoint (3 in flight, progress shown, failures drawn
+as "Photo unavailable"), re-compresses thumbs to ≤ 800 px, and renders an A4
+report in the Deepa palette: a red (#B5122A) header with the Deepa logo on a white chip on the left, the tagline “தீப வணக்கம்” under the store name, and
+the white C&B logo on the right, a summary strip, a table per section
+(Task | Response | Status | Remarks, coloured **and** worded status), photo
+thumbnails with "Photo taken: … IST" + "Photo *i* of *n*" captions, and a
+text-only footer on every page (staff + date on the left, "Page *x* of *y*"
+on the right). Saving uses a Blob URL
+where `a.download` is unavailable (iOS Safari). An admin-wide variant can reuse
+the same two functions from `dashboard.html` with a `getDashboard` payload.
+
+## 12. Branding logo
+
+Every page renders a shared `.cb-footer` block from `css/theme.css` containing
+only the C&B logo image — no card, no box, no background and no text, so it
+blends into whatever the page already shows. The file is
+`images/cb-logo.png` (transparent PNG); the `<img>` carries
+`onerror="this.style.display='none'"`, so a missing or unreadable file simply
+collapses the footer instead of showing a broken image.
+
+The artwork is dark grey, so it needs two renderings, both driven off the
+**same single file**:
+
+| Surface | Rendering |
+| --- | --- |
+| Light pages (`checklist`, `dashboard`, `admin`) | the PNG as-is |
+| Dark surfaces (red login page) | `.cb-logo--onDark` → `filter: brightness(0) invert(1)` |
+| PDF header (red band) | recoloured white at runtime in `js/report.js` |
+
+The runtime white version draws the PNG onto a canvas and paints it with
+`globalCompositeOperation = 'source-in'` plus a white fill, which keeps the
+PNG's alpha and replaces only its colour, then re-exports PNG. No second image
+file exists on disk.
+
+In the PDF the C&B logo sits in the **header**, top-right inside the red
+band, mirroring the Deepa logo on the left: 11 mm tall, right margin equal to the
+left margin, aspect ratio taken from the image's real pixel dimensions, and
+vertically centred in the band. The title shrinks if it would otherwise reach
+the logo, so the two never overlap. Page footers carry text only —
+"Deepa Silks Store Operations Checklist - <staff> - <date>" and "Page x of y" —
+with no logo. jsPDF's `addImage` **detects the format from the loaded data
+URL** (`image/png` → `PNG`, `image/jpeg` → `JPEG`) instead of assuming one, and
+the logo is skipped cleanly if it fails to load.
